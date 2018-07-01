@@ -1,6 +1,6 @@
 var mongodb = require('mongodb')
 
-var conStr = 'mongodb://localhost:27017/mongodb-queue'
+var conStr = 'mongodb://127.0.0.1:27017/mongodb-queue'
 
 module.exports = function(queueName) {
   return new Promise((resolve, reject)=>{

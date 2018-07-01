@@ -1,22 +1,25 @@
 const EventEmitter = require('events').EventEmitter
 
 const Processor = function(q, fn, opts = {}){
-  console.log('*****Processor Constructor*******')
+  const debug = require('debug')(`processor:${opts.concurrency||5}:${opts.pollInterval||'nopoll'}`)
+  debug('*****Processor Constructor*******')
   if(!q || q.constructor.name !== 'Queue') throw new Error('Processor: you must pass in a valid Queue object')
   if(!fn) throw new Error('Processor: you must pass in a function')
 
   const self = new EventEmitter()
   
-  let pollInterval = opts.pollInterval || 2000
+  let pollInterval = opts.pollInterval || null
   let concurrency = opts.concurrency || 5
   self.inFlight = 0
+  let pendingInFlight = 0
   let pollTimer = null
   let stopped = false
+  let emptyCount = 0
 
   
   const clearWait = () => {
     if(pollTimer){
-      console.log('clearing timeout')
+      debug('clearing timeout')
       clearTimeout(pollTimer)
       pollTimer = null
     }
@@ -24,67 +27,95 @@ const Processor = function(q, fn, opts = {}){
   
   const waitThenPoll = () => {
     clearWait()
-    console.log('waiting', pollInterval, self.inFlight)
-    pollTimer = setTimeout(self.pollAndFillSlots, pollInterval)
+    if(pollInterval){
+      debug('waiting', pollInterval, self.inFlight)
+      pollTimer = setTimeout(self.pollAndFillSlots, pollInterval)
+    }else{
+      debug('pollInterval not set...you must call pollAndFillSlots manually to nudge the processor')
+    }
   }
 
+  let count = 0
+
   self.pollAndFillSlots = () => {
-    console.log('pollAndFillSlots called', self.inFlight)
-    if(self.inFlight < concurrency){
+    count++
+    if (self.inFlight === 0 && pendingInFlight === 0 && count === 4){
+      debugger
+    }
+    debug('pollAndFillSlots called - inFlight', self.inFlight,'pending', pendingInFlight,'count', count)
+    if((pendingInFlight + self.inFlight) < concurrency){
       clearWait()
-      self.inFlight++
+      pendingInFlight++
       q.dequeue()
         .then((msg)=>{
+          pendingInFlight--
           if(msg){
+            emptyCount = 0
+            self.inFlight++
             processAndFinishMsg(msg)
+              .then(()=>{
+                debug('THEN decrement')
+                self.inFlight--
+                self.pollAndFillSlots()
+              })
               .catch(err=>{
                 console.warn('processing err', err)
                 self.inFlight--
                 self.pollAndFillSlots()
               })
-              .then(()=>{
-                console.log('THEN decrement')
-                self.inFlight--
-                self.pollAndFillSlots()
-              })
+            // self.pollAndFillSlots()
           } else {
-            console.log('queue empty')
-            self.inFlight--
+            emptyCount++
+            debug('queue empty',emptyCount)
             waitThenPoll()
           }
         })
+        .catch((err)=>{
+          debug('dequeue catch', err)
+          pendingInFlight--
+          waitThenPoll()
+          // self.pollAndFillSlots()
+        })
+    } else if(pendingInFlight > 0) {
+      debug('pendingInFlight > 0....calling again')
       self.pollAndFillSlots()
-    } else {
+    }
+    else {
       waitThenPoll()
     }
   }
+
   const processAndFinishMsg = async (msg) => {
     if(!msg){
-      console.log('no message on queue, returning false')
+      debug('no message on queue, returning false')
       return false // 
     }
-    console.log('processAndFinishMsg', msg.id)
+    debug('processAndFinishMsg', msg.id)
     try {
       let result = await fn(q, msg)
-      console.log('acking processAndFinishMsg', msg.id)
+      debug('acking processAndFinishMsg', msg.id)
       return await q.ack(msg.id)
     } catch (error) {
-      console.log('FAILING processAndFinishMsg', msg.id)
+      debug('FAILING processAndFinishMsg', msg.id)
       return await q.fail(msg.id, error)
     }
-    console.log('END processAndFinishMsg', msg.id)
+    debug('END processAndFinishMsg', msg.id)
   }
 
   self.pollAndFillSlots()
   
   return {
-    stop(){
+    stop(force){
+      // TODO: Need to implement graceful shutdown
       clearWait()
       stopped = true
-      console.log('processor has been stopped!')
+      debug('processor has been stopped!')
     },
     get inFlight(){
       return self.inFlight
+    },
+    get pendingInFlight(){
+      return pendingInFlight
     },
     get pollTimer(){
       return pollTimer

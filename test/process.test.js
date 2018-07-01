@@ -29,6 +29,9 @@ test('multiple concurrency', async t => {
     await new Promise(resolve => setTimeout(resolve, 200))
     return 'processor done'+msg.id
   },{concurrency: 5})
+  // await new Promise(resolve => setTimeout(resolve, 8))
+  t.is(q.processor.inFlight, 0)
+  await new Promise(resolve => setTimeout(resolve, 100))
   t.is(q.processor.inFlight, 5)
   await new Promise(resolve => setTimeout(resolve, 250))
   t.is(q.processor.inFlight, 4)
@@ -52,6 +55,7 @@ test('no concurrency', async t => {
     await new Promise(resolve => setTimeout(resolve, 200))
     return 'processor done'+msg.id
   },{ concurrency: 1 })
+  await new Promise(resolve => setTimeout(resolve, 50))
   t.is(q.processor.inFlight, 1)
   await new Promise(resolve => setTimeout(resolve, 250))
   t.is(q.processor.inFlight, 1)
@@ -72,6 +76,23 @@ test('priority', async t => {
   },{ concurrency: 1 })
   t.is((await q.get(firstJob)).status,'waiting')
   t.is((await q.get(secondJob)).status,'running')
+})
+
+test('process failure', async t => {
+  db = await setup('process-failure')
+  let q = await mongoDbQueue(db, 'process-failure')
+  t.is(q.processor, null)
+  let jobs = await q.enqueue([{},{}])
+  q.process(async (q, msg)=>{
+    // await new Promise(resolve => setTimeout(resolve, 4000))
+    throw new Error('failed')
+  })
+  t.not(q.processor, null)
+  t.is(typeof q.processor, 'object')
+  t.is(q.processor.inFlight, 0)
+  await new Promise(resolve => setTimeout(resolve, 200))
+  t.is((await q.get(jobs[0])).status,'failed')
+  t.is((await q.get(jobs[1])).status,'failed')
 })
 
 test.after('close the db conn', t => {

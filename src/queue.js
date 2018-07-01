@@ -16,6 +16,7 @@ function Queue(mongoDbClient, name, opts) {
   if (!mongoDbClient) throw new Error('a-mongo-queue: must provide a mongodb.MongoClient')
   if (!name) throw new Error('a-mongo-queue: must provide a queue name')
   opts = opts || {}
+  // this.debug = require('debug')('queue:'+name)
   this.name = name
   this.workerId = `${os.hostname()}-${process.pid}-${Math.floor(Math.random() * (9999 - 0))}`
   this.col = mongoDbClient.collection(name)
@@ -77,9 +78,13 @@ Queue.prototype.enqueue = async function(payload, opts) {
   let results = await this.col.insertMany(msgs)
   if (payload instanceof Array){
     self.emit('enqueued', results.insertedIds)
+    if(this.processor)
+      this.processor.pollAndFillSlots()
     return results.insertedIds
   }else{
     self.emit('enqueued', results.ops[0]._id)
+    if(this.processor)
+      this.processor.pollAndFillSlots()
     return results.ops[0]._id
   }
 }
@@ -223,9 +228,9 @@ Queue.prototype.process = function(fn, opts = {}) {
   this.processor = new require('./processor')(this, fn, opts)
 }
 
-Queue.prototype.stop = function(graceful) {
+Queue.prototype.stop = function(force) {
   if(this.processor) {
-    this.processor.stop(graceful)
+    this.processor.stop(force)
   } else {
     throw new Error('Queue.stop(): there is no procesor defined')
   }
